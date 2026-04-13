@@ -1,0 +1,40 @@
+name: Build & Push to ACR
+
+on:
+  push:
+    branches: [main]
+
+env:
+  ACR_LOGIN_SERVER: acraltairprod.azurecr.io
+  IMAGE_NAME: peppermint
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        run: az acr login --name acraltairprod
+
+      - name: Build & Push Docker image
+        run: |
+          docker build \
+            -t $ACR_LOGIN_SERVER/$IMAGE_NAME:$GITHUB_SHA \
+            -t $ACR_LOGIN_SERVER/$IMAGE_NAME:latest \
+            .
+          docker push $ACR_LOGIN_SERVER/$IMAGE_NAME:$GITHUB_SHA
+          docker push $ACR_LOGIN_SERVER/$IMAGE_NAME:latest
+          echo "Pushed $ACR_LOGIN_SERVER/$IMAGE_NAME:$GITHUB_SHA"
