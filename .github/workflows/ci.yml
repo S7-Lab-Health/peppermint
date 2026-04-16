@@ -33,7 +33,7 @@ jobs:
       # postinstall runs `prisma generate` — generates TS types from schema,
       # no real DB connection needed.
       - name: Install dependencies
-        run: npm install
+        run: npm install --legacy-peer-deps
 
       - name: TypeScript compile
         run: npm run build
