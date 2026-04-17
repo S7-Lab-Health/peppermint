@@ -99,34 +99,44 @@ const priorityOptions = [
  * - Plain text fallback
  */
 function CommentContent({ text }: { text: string }) {
-  // Check for attachment pattern — render as clickable image preview
+  // Check for attachment pattern — render text before it (if any) + image/link preview
   const attachmentMatch = text.match(/📎 Attachment: \[(.+?)]\((.+?)\)/);
   if (attachmentMatch) {
-    const [, filename, url] = attachmentMatch;
+    const [fullMatch, filename, url] = attachmentMatch;
     const isImage =
       /\.(png|jpg|jpeg|gif|webp|svg|bmp)$/i.test(filename) ||
       url.includes("blob.core.windows.net");
+    // Strip the attachment line (and any surrounding whitespace/newlines) to get plain text
+    const beforeText = text
+      .slice(0, attachmentMatch.index)
+      .replace(/\n+$/, "")
+      .trim();
     return (
-      <div className="ml-1 mt-2">
-        {isImage ? (
-          <a href={url} target="_blank" rel="noopener noreferrer">
-            <img
-              src={url}
-              alt={filename}
-              className="rounded-lg max-w-full max-h-80 object-contain border shadow-sm"
-            />
-          </a>
-        ) : (
-          <a
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-500 hover:underline inline-flex items-center gap-1"
-          >
-            📎 {filename}
-          </a>
+      <div className="ml-1">
+        {beforeText && (
+          <p className="text-sm whitespace-pre-wrap mb-2">{beforeText}</p>
         )}
-        <p className="text-xs text-muted-foreground mt-1">{filename}</p>
+        <div className="mt-1">
+          {isImage ? (
+            <a href={url} target="_blank" rel="noopener noreferrer">
+              <img
+                src={url}
+                alt={filename}
+                className="rounded-lg max-w-full max-h-80 object-contain border shadow-sm"
+              />
+            </a>
+          ) : (
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-500 hover:underline inline-flex items-center gap-1"
+            >
+              📎 {filename}
+            </a>
+          )}
+          <p className="text-xs text-muted-foreground mt-1">{filename}</p>
+        </div>
       </div>
     );
   }
@@ -1220,7 +1230,12 @@ export default function Ticket() {
                                     />
                                   )}
                                 </div>
-                                <CommentContent text={comment.text} />
+                                <CommentContent
+                                  text={comment.text.replace(
+                                    /^\[\[.+?\]\]\n/,
+                                    ""
+                                  )}
+                                />
                               </li>
                             ))}
                         </ul>
