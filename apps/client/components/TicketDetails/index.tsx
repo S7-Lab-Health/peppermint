@@ -99,41 +99,64 @@ const priorityOptions = [
  * - Plain text fallback
  */
 function CommentContent({ text }: { text: string }) {
-  // Check for attachment pattern — render as clickable image preview
-  const attachmentMatch = text.match(/📎 Attachment: \[(.+?)]\((.+?)\)/);
+  // Extract [[Name]] attribution prefix added by the Altair BFF
+  // Format: "[[Jean-François]]\nactual body text"
+  const attributionMatch = text.match(/^\[\[(.+?)\]\]\n([\s\S]*)$/);
+  const attribution = attributionMatch ? attributionMatch[1] : null;
+  const body = attributionMatch ? attributionMatch[2] : text;
+
+  const AttributionLabel = attribution ? (
+    <p className="text-xs text-muted-foreground mb-1">
+      via Altair · <span className="font-medium">{attribution}</span>
+    </p>
+  ) : null;
+
+  // Check for attachment pattern — render text before it (if any) + image/link preview
+  const attachmentMatch = body.match(/📎 Attachment: \[(.+?)]\((.+?)\)/);
   if (attachmentMatch) {
     const [, filename, url] = attachmentMatch;
     const isImage =
       /\.(png|jpg|jpeg|gif|webp|svg|bmp)$/i.test(filename) ||
       url.includes("blob.core.windows.net");
+    // Strip the attachment line to get any preceding text
+    const beforeText = body
+      .slice(0, attachmentMatch.index)
+      .replace(/\n+$/, "")
+      .trim();
     return (
-      <div className="ml-1 mt-2">
-        {isImage ? (
-          <a href={url} target="_blank" rel="noopener noreferrer">
-            <img
-              src={url}
-              alt={filename}
-              className="rounded-lg max-w-full max-h-80 object-contain border shadow-sm"
-            />
-          </a>
-        ) : (
-          <a
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-500 hover:underline inline-flex items-center gap-1"
-          >
-            📎 {filename}
-          </a>
+      <div className="ml-1">
+        {AttributionLabel}
+        {beforeText && (
+          <p className="text-sm whitespace-pre-wrap mb-2">{beforeText}</p>
         )}
-        <p className="text-xs text-muted-foreground mt-1">{filename}</p>
+        <div className="mt-1">
+          {isImage ? (
+            <a href={url} target="_blank" rel="noopener noreferrer">
+              <img
+                src={url}
+                alt={filename}
+                className="rounded-lg max-w-full max-h-80 object-contain border shadow-sm"
+              />
+            </a>
+          ) : (
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-500 hover:underline inline-flex items-center gap-1"
+            >
+              📎 {filename}
+            </a>
+          )}
+          <p className="text-xs text-muted-foreground mt-1">{filename}</p>
+        </div>
       </div>
     );
   }
 
   // Check for debug context — render as collapsible panel
-  if (text.includes("## Debug Context")) {
-    const lines = text
+  if (body.includes("## Debug Context")) {
+    const lines = body
       .replace(/^---\n/, "")
       .replace("## Debug Context\n", "")
       .trim()
@@ -171,22 +194,30 @@ function CommentContent({ text }: { text: string }) {
     );
   }
 
-  // Check for markdown-style bold
-  if (text.includes("**")) {
-    const parts = text.split(/(\*\*.+?\*\*)/g);
+  // Plain text (with optional markdown bold)
+  if (body.includes("**")) {
+    const parts = body.split(/(\*\*.+?\*\*)/g);
     return (
-      <span className="ml-1 whitespace-pre-wrap">
-        {parts.map((part, i) => {
-          if (part.startsWith("**") && part.endsWith("**")) {
-            return <strong key={i}>{part.slice(2, -2)}</strong>;
-          }
-          return <span key={i}>{part}</span>;
-        })}
-      </span>
+      <div className="ml-1">
+        {AttributionLabel}
+        <span className="whitespace-pre-wrap">
+          {parts.map((part, i) => {
+            if (part.startsWith("**") && part.endsWith("**")) {
+              return <strong key={i}>{part.slice(2, -2)}</strong>;
+            }
+            return <span key={i}>{part}</span>;
+          })}
+        </span>
+      </div>
     );
   }
 
-  return <span className="ml-1">{text}</span>;
+  return (
+    <div className="ml-1">
+      {AttributionLabel}
+      <span>{body}</span>
+    </div>
+  );
 }
 
 export default function Ticket() {
