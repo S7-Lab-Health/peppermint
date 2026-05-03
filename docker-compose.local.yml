@@ -16,7 +16,7 @@ services:
     container_name: peppermint
     build: "."
     ports:
-      - 3000:3000
+      - 3002:3000
       - 5001:5003
     restart: always
     depends_on:
