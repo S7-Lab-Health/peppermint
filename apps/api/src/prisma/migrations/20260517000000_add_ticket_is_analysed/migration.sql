@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "Ticket" ADD COLUMN IF NOT EXISTS "isAnalysed" BOOLEAN NOT NULL DEFAULT false;
