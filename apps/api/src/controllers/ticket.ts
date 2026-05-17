@@ -839,6 +839,22 @@ export function ticketRoutes(fastify: FastifyInstance) {
     }
   );
 
+  // Mark a ticket as analysed by Altair's automated investigation pipeline
+  fastify.put(
+    "/api/v1/ticket/:id/mark-analysed",
+    {
+      preHandler: requirePermission(["issue::update"]),
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id }: any = request.params;
+      await prisma.ticket.update({
+        where: { id },
+        data: { isAnalysed: true },
+      });
+      reply.status(200).send({ success: true });
+    }
+  );
+
   // Hide a ticket
   fastify.put(
     "/api/v1/ticket/status/hide",

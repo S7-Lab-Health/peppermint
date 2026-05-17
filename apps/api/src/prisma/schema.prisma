@@ -128,7 +128,8 @@ model Ticket {
   detail     String?
   email      String?
   note       String?
-  isComplete Boolean
+  isComplete  Boolean
+  isAnalysed  Boolean @default(false)
   priority   String
   linked     Json?
   fromImap   Boolean
