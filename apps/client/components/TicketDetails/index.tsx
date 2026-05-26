@@ -43,6 +43,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/shadcn/ui/popover";
 import { Switch } from "@/shadcn/ui/switch";
 import {
+  ArrowLeft,
   CheckIcon,
   CircleCheck,
   CircleDotDashed,
@@ -869,6 +870,15 @@ export default function Ticket() {
         <ContextMenu>
           <ContextMenuTrigger>
             <main className="flex-1 min-h-[90vh] py-8">
+              <div className="mx-auto max-w-7xl w-full px-4 mb-4">
+                <button
+                  onClick={() => router.back()}
+                  className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  Back
+                </button>
+              </div>
               <div className="mx-auto max-w-7xl w-full px-4 flex flex-col lg:flex-row justify-center">
                 <div className="lg:border-r lg:pr-8 lg:w-2/3">
                   <div className="md:flex md:justify-between md:space-x-4 lg:border-b lg:pb-4">
