@@ -25,6 +25,7 @@ export type Ticket = {
   team?: Team;
   assignedTo?: User;
   isComplete: boolean;
+  isAnalysed?: boolean;
 };
 
 export type KanbanColumn = {

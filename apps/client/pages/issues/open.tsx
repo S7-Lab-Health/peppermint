@@ -34,12 +34,13 @@ import { useQuery } from "react-query";
 import { useUser } from "../../store/session";
 
 async function getUserTickets(token: any) {
-  const res = await fetch(`/api/v1/tickets/user/open`, {
+  const res = await fetch(`/api/v1/tickets/all`, {
     headers: {
       Authorization: `Bearer ${token}`,
     },
   });
-  return res.json();
+  const data = await res.json();
+  return { tickets: (data.tickets ?? []).filter((t: any) => !t.isComplete) };
 }
 
 const FilterBadge = ({
@@ -364,11 +365,6 @@ export default function Tickets() {
                               onSelect={() => setActiveFilter("priority")}
                             >
                               Priority
-                            </CommandItem>
-                            <CommandItem
-                              onSelect={() => setActiveFilter("status")}
-                            >
-                              Status
                             </CommandItem>
                             <CommandItem
                               onSelect={() => setActiveFilter("assignee")}

@@ -43,9 +43,11 @@ export default function Tickets() {
     selectedPriorities,
     selectedStatuses,
     selectedAssignees,
+    selectedTypes,
     handlePriorityToggle,
     handleStatusToggle,
     handleAssigneeToggle,
+    handleTypeToggle,
     clearFilters,
     filteredTickets
   } = useTicketFilters(data?.tickets);
@@ -126,10 +128,12 @@ export default function Tickets() {
           selectedPriorities={selectedPriorities}
           selectedStatuses={selectedStatuses}
           selectedAssignees={selectedAssignees}
+          selectedTypes={selectedTypes}
           users={users}
           onPriorityToggle={handlePriorityToggle}
           onStatusToggle={handleStatusToggle}
           onAssigneeToggle={handleAssigneeToggle}
+          onTypeToggle={handleTypeToggle}
           onClearFilters={clearFilters}
         />
         
