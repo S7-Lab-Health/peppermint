@@ -50,6 +50,7 @@ jobs:
           IMAGE="${ACR_LOGIN_SERVER}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
           az acr build \
             --registry "$ACR_NAME" \
+            --agent-pool agentpool-production \
             --image "${{ env.IMAGE_NAME }}:${{ github.sha }}" \
             --file dockerfile \
             .
