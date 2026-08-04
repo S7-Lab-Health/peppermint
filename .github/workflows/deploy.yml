@@ -51,6 +51,7 @@ jobs:
           az acr build \
             --registry "$ACR_NAME" \
             --image "${{ env.IMAGE_NAME }}:${{ github.sha }}" \
+            --file dockerfile \
             .
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
