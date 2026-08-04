@@ -42,17 +42,16 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Log in to ACR
-        run: |
-          ACR_NAME="${{ vars.ACR_LOGIN_SERVER }}"
-          az acr login --name "${ACR_NAME%.azurecr.io}"
-
       - name: Build and push
         id: push
         run: |
-          IMAGE="${{ vars.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          docker build -t "$IMAGE" .
-          docker push "$IMAGE"
+          ACR_LOGIN_SERVER="${{ vars.ACR_LOGIN_SERVER }}"
+          ACR_NAME="${ACR_LOGIN_SERVER%.azurecr.io}"
+          IMAGE="${ACR_LOGIN_SERVER}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          az acr build \
+            --registry "$ACR_NAME" \
+            --image "${{ env.IMAGE_NAME }}:${{ github.sha }}" \
+            .
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
   deploy:
