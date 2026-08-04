@@ -22,7 +22,7 @@ RUN cd apps/api && npm install --production
 RUN cd apps/api && npm i --save-dev @types/node && npm run build
 
 RUN cd apps/client && yarn install --production --ignore-scripts --prefer-offline --network-timeout 1000000
-RUN cd apps/client && yarn add --dev typescript @types/node --network-timeout 1000000
+RUN cd apps/client && yarn add --dev typescript@5.4 @types/node@17.0.4 --network-timeout 1000000
 RUN cd apps/client && yarn build
 
 FROM node:lts AS runner
