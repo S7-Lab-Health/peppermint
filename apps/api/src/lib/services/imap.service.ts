@@ -1,6 +1,7 @@
 import EmailReplyParser from "email-reply-parser";
 import Imap from "imap";
 import { simpleParser } from "mailparser";
+import { Readable } from "node:stream";
 import { prisma } from "../../prisma";
 import { EmailConfig, EmailQueue } from "../types/email";
 import { AuthService } from "./auth.service";
@@ -164,7 +165,7 @@ export class ImapService {
 
                 fetch.on("message", (msg) => {
                   msg.on("body", (stream) => {
-                    simpleParser(stream, async (err, parsed) => {
+                    simpleParser(new Readable().wrap(stream), async (err, parsed) => {
                       if (err) throw err;
                       const subjectLower = parsed.subject?.toLowerCase() || "";
                       const isReply =
