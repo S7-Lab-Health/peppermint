@@ -48,12 +48,29 @@ jobs:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci-runner
-      - name: Set up shared ACR admission
-        uses: S7-Lab-Health/altair-infra/.github/actions/acr-agentpool-scale-up@da53bfa6f9d9264156449b29420bb43fade54975
-        with:
-          operation: setup
-          coordination-account: altairasprod
-          coordination-container: acr-pool-coordination
+      - name: Verify and set up shared ACR admission
+        # Public workflows cannot load a private repository action. This is an
+        # exact, hash-verified export of the same policy, not a separate policy.
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ['GITHUB_WORKSPACE'])
+          folder = root / 'scripts/ci/vendor/acr_pool'
+          manifest = json.loads((folder / 'upstream.json').read_text())
+          policy = folder / 'pool.py'
+          if hashlib.sha256(policy.read_bytes()).hexdigest() != manifest['sha256']:
+              raise SystemExit('Shared ACR policy differs from its pinned export')
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write(f'ACR_POOL_GUARD={policy}\n')
+              output.write('ACR_REGISTRY=acraltairprod\n')
+              output.write('ACR_AGENT_POOL=agentpool-production\n')
+              output.write('ACR_COORDINATION_ACCOUNT=altairasprod\n')
+              output.write('ACR_COORDINATION_CONTAINER=acr-pool-coordination\n')
+          PY
 
       - name: Build and push
         id: push
