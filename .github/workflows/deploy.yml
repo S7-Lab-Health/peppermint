@@ -49,7 +49,7 @@ jobs:
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci-runner
       - name: Set up shared ACR admission
-        uses: S7-Lab-Health/altair-infra/.github/actions/acr-agentpool-scale-up@69dd37cc58fcf29f0e88aec3cd518289c800bfac
+        uses: S7-Lab-Health/altair-infra/.github/actions/acr-agentpool-scale-up@da53bfa6f9d9264156449b29420bb43fade54975
         with:
           operation: setup
           coordination-account: altairasprod
