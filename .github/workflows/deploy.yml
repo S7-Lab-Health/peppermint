@@ -42,15 +42,28 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Connect to Tailnet for the pool journal
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci-runner
+      - name: Set up shared ACR admission
+        uses: S7-Lab-Health/altair-infra/.github/actions/acr-agentpool-scale-up@69dd37cc58fcf29f0e88aec3cd518289c800bfac
+        with:
+          operation: setup
+          coordination-account: altairasprod
+          coordination-container: acr-pool-coordination
+
       - name: Build and push
         id: push
         run: |
+          set -euo pipefail
           ACR_LOGIN_SERVER="${{ vars.ACR_LOGIN_SERVER }}"
           ACR_NAME="${ACR_LOGIN_SERVER%.azurecr.io}"
           IMAGE="${ACR_LOGIN_SERVER}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          az acr build \
-            --registry "$ACR_NAME" \
-            --agent-pool agentpool-production \
+          python3 "$ACR_POOL_GUARD" build --registry "$ACR_NAME" \
+            --key "${GITHUB_REPOSITORY}/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}/${GITHUB_JOB}/image" --wait 1800 -- \
             --image "${{ env.IMAGE_NAME }}:${{ github.sha }}" \
             --file dockerfile \
             .
