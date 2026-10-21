@@ -48,6 +48,32 @@ jobs:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci-runner
+      - name: Check private journal access
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import ipaddress
+          import json
+          import re
+          import socket
+          import subprocess
+          host = 'altairasprod.blob.core.windows.net'
+          addresses = {row[4][0] for row in socket.getaddrinfo(host, 443)}
+          print('Journal DNS resolves privately:', all(ipaddress.ip_address(ip).is_private for ip in addresses), flush=True)
+          def read(label, args):
+              result = subprocess.run(['az', *args, '--only-show-errors', '-o', 'json'], capture_output=True, text=True, timeout=60)
+              if result.returncode:
+                  codes = re.findall(r'\(([A-Za-z][A-Za-z0-9]+)\)|ErrorCode:([A-Za-z0-9]+)', result.stderr)
+                  code = next((a or b for a, b in codes), 'unclassified')
+                  raise SystemExit(label + ' failed: ' + code)
+              print(label + ' passed', flush=True)
+              return json.loads(result.stdout)
+          registry = read('Registry read', ['acr', 'show', '--name', 'acraltairprod', '--query', 'id'])
+          pool_id = registry + '/agentPools/agentpool-production'
+          name = hashlib.sha256(pool_id.lower().encode()).hexdigest() + '.json'
+          read('Journal metadata read', ['storage', 'blob', 'show', '--account-name', 'altairasprod', '--container-name', 'acr-pool-coordination', '--auth-mode', 'login', '--name', name, '--query', 'properties.lease.status'])
+          PY
+
       - name: Verify and set up shared ACR admission
         # Public workflows cannot load a private repository action. This is an
         # exact, hash-verified export of the same policy, not a separate policy.
