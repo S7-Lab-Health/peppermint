@@ -64,12 +64,46 @@ jobs:
           policy = folder / 'pool.py'
           if hashlib.sha256(policy.read_bytes()).hexdigest() != manifest['sha256']:
               raise SystemExit('Shared ACR policy differs from its pinned export')
+          endpoint = folder / 'private_endpoint.py'
+          endpoint_manifest = json.loads((folder / 'private_endpoint_upstream.json').read_text())
+          if hashlib.sha256(endpoint.read_bytes()).hexdigest() != endpoint_manifest['sha256']:
+              raise SystemExit('Private endpoint helper differs from its pinned export')
           with open(os.environ['GITHUB_ENV'], 'a') as output:
               output.write(f'ACR_POOL_GUARD={policy}\n')
+              output.write(f'ACR_POOL_ENDPOINT_HELPER={endpoint}\n')
               output.write('ACR_REGISTRY=acraltairprod\n')
               output.write('ACR_AGENT_POOL=agentpool-production\n')
               output.write('ACR_COORDINATION_ACCOUNT=altairasprod\n')
               output.write('ACR_COORDINATION_CONTAINER=acr-pool-coordination\n')
+          PY
+
+      - name: Bind the verified private journal endpoint
+        run: sudo python3 "$ACR_POOL_ENDPOINT_HELPER" --account altairasprod --address 10.0.4.5
+
+      - name: Check private journal access
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import ipaddress
+          import json
+          import re
+          import socket
+          import subprocess
+          host = 'altairasprod.blob.core.windows.net'
+          addresses = {row[4][0] for row in socket.getaddrinfo(host, 443)}
+          print('Journal DNS resolves privately:', all(ipaddress.ip_address(ip).is_private for ip in addresses), flush=True)
+          def read(label, args):
+              result = subprocess.run(['az', *args, '--only-show-errors', '-o', 'json'], capture_output=True, text=True, timeout=60)
+              if result.returncode:
+                  codes = re.findall(r'\(([A-Za-z][A-Za-z0-9]+)\)|ErrorCode:([A-Za-z0-9]+)', result.stderr)
+                  code = next((a or b for a, b in codes), 'unclassified')
+                  raise SystemExit(label + ' failed: ' + code)
+              print(label + ' passed', flush=True)
+              return json.loads(result.stdout)
+          registry = read('Registry read', ['acr', 'show', '--name', 'acraltairprod', '--query', 'id'])
+          pool_id = registry + '/agentPools/agentpool-production'
+          name = hashlib.sha256(pool_id.lower().encode()).hexdigest() + '.json'
+          read('Journal metadata read', ['storage', 'blob', 'show', '--account-name', 'altairasprod', '--container-name', 'acr-pool-coordination', '--auth-mode', 'login', '--name', name, '--query', 'properties.lease.status'])
           PY
 
       - name: Build and push

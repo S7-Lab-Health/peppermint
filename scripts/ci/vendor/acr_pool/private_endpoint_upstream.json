@@ -1,0 +1,6 @@
+{
+  "repository": "S7-Lab-Health/altair-infra",
+  "revision": "cf22fd2d0b2911c84283a45758f69e3a4a55288b",
+  "path": ".github/actions/acr-agentpool-scale-up/private_endpoint.py",
+  "sha256": "19225b823caf4bc2c78e570edc3f405adbd030cfdd0bef8f4256d78429124950"
+}
