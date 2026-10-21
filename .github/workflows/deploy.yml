@@ -48,6 +48,38 @@ jobs:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci-runner
+      - name: Verify and set up shared ACR admission
+        # Public workflows cannot load a private repository action. This is an
+        # exact, hash-verified export of the same policy, not a separate policy.
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ['GITHUB_WORKSPACE'])
+          folder = root / 'scripts/ci/vendor/acr_pool'
+          manifest = json.loads((folder / 'upstream.json').read_text())
+          policy = folder / 'pool.py'
+          if hashlib.sha256(policy.read_bytes()).hexdigest() != manifest['sha256']:
+              raise SystemExit('Shared ACR policy differs from its pinned export')
+          endpoint = folder / 'private_endpoint.py'
+          endpoint_manifest = json.loads((folder / 'private_endpoint_upstream.json').read_text())
+          if hashlib.sha256(endpoint.read_bytes()).hexdigest() != endpoint_manifest['sha256']:
+              raise SystemExit('Private endpoint helper differs from its pinned export')
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write(f'ACR_POOL_GUARD={policy}\n')
+              output.write(f'ACR_POOL_ENDPOINT_HELPER={endpoint}\n')
+              output.write('ACR_REGISTRY=acraltairprod\n')
+              output.write('ACR_AGENT_POOL=agentpool-production\n')
+              output.write('ACR_COORDINATION_ACCOUNT=altairasprod\n')
+              output.write('ACR_COORDINATION_CONTAINER=acr-pool-coordination\n')
+          PY
+
+      - name: Bind the verified private journal endpoint
+        run: sudo python3 "$ACR_POOL_ENDPOINT_HELPER" --account altairasprod --address 10.0.4.5
+
       - name: Check private journal access
         run: |
           python3 - <<'PY'
@@ -72,30 +104,6 @@ jobs:
           pool_id = registry + '/agentPools/agentpool-production'
           name = hashlib.sha256(pool_id.lower().encode()).hexdigest() + '.json'
           read('Journal metadata read', ['storage', 'blob', 'show', '--account-name', 'altairasprod', '--container-name', 'acr-pool-coordination', '--auth-mode', 'login', '--name', name, '--query', 'properties.lease.status'])
-          PY
-
-      - name: Verify and set up shared ACR admission
-        # Public workflows cannot load a private repository action. This is an
-        # exact, hash-verified export of the same policy, not a separate policy.
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-          root = Path(os.environ['GITHUB_WORKSPACE'])
-          folder = root / 'scripts/ci/vendor/acr_pool'
-          manifest = json.loads((folder / 'upstream.json').read_text())
-          policy = folder / 'pool.py'
-          if hashlib.sha256(policy.read_bytes()).hexdigest() != manifest['sha256']:
-              raise SystemExit('Shared ACR policy differs from its pinned export')
-          with open(os.environ['GITHUB_ENV'], 'a') as output:
-              output.write(f'ACR_POOL_GUARD={policy}\n')
-              output.write('ACR_REGISTRY=acraltairprod\n')
-              output.write('ACR_AGENT_POOL=agentpool-production\n')
-              output.write('ACR_COORDINATION_ACCOUNT=altairasprod\n')
-              output.write('ACR_COORDINATION_CONTAINER=acr-pool-coordination\n')
           PY
 
       - name: Build and push
