@@ -19,8 +19,24 @@ jobs:
     steps:
       - checkout
       - run:
+          name: Validate GitHub main, CircleCI identity, and approved SHA before setup
+          command: bash scripts/ci/circleci-production-release.sh validate
+          no_output_timeout: 2m
+      - run:
+          name: Prepare Azure CLI and Container Apps command
+          command: timeout --signal=TERM --kill-after=20s 10m bash scripts/ci/circleci_peppermint_tools.sh
+          no_output_timeout: 10m
+      - run:
           name: Run the existing Peppermint build and ACA update with the shared ACR guard
-          command: bash scripts/ci/circleci-production-release.sh
+          command: timeout --signal=TERM --kill-after=30s 50m bash scripts/ci/circleci_peppermint_tailnet.sh run
+          no_output_timeout: 40m
+      - run:
+          name: Remove temporary Tailnet session
+          when: always
+          command: bash scripts/ci/circleci_peppermint_tailnet.sh cleanup
+      - store_artifacts:
+          path: artifacts/peppermint-production-release.json
+          destination: peppermint-production-release.json
 
 workflows:
   production-release-rehearsal:
