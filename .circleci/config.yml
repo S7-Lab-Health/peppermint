@@ -1,0 +1,57 @@
+version: 2.1
+
+# Manual release rehearsal only. No push/PR event enables this workflow.
+parameters:
+  run-peppermint-production:
+    type: boolean
+    default: false
+  expected-release-sha:
+    type: string
+    default: ""
+
+jobs:
+  release-production:
+    machine:
+      image: ubuntu-2404:current
+    resource_class: medium
+    environment:
+      EXPECTED_RELEASE_SHA: << pipeline.parameters.expected-release-sha >>
+    steps:
+      - checkout
+      - run:
+          name: Validate GitHub main, CircleCI identity, and approved SHA before setup
+          command: bash scripts/ci/circleci-production-release.sh validate
+          no_output_timeout: 2m
+      - run:
+          name: Prepare Azure CLI and Container Apps command
+          command: timeout --signal=TERM --kill-after=20s 10m bash scripts/ci/circleci_peppermint_tools.sh
+          no_output_timeout: 10m
+      - run:
+          name: Run the existing Peppermint build and ACA update with the shared ACR guard
+          command: timeout --signal=TERM --kill-after=30s 50m bash scripts/ci/circleci_peppermint_tailnet.sh run
+          no_output_timeout: 40m
+      - run:
+          name: Remove temporary Tailnet session
+          when: always
+          command: bash scripts/ci/circleci_peppermint_tailnet.sh cleanup
+      - store_artifacts:
+          path: artifacts/peppermint-production-release.json
+          destination: peppermint-production-release.json
+
+workflows:
+  production-release-rehearsal:
+    when: << pipeline.parameters.run-peppermint-production >>
+    jobs:
+      - approve-production:
+          type: approval
+          filters:
+            branches:
+              only: main
+      - release-production:
+          context: altair-peppermint-production-release
+          requires:
+            - approve-production
+          serial-group: altair-peppermint-production
+          filters:
+            branches:
+              only: main

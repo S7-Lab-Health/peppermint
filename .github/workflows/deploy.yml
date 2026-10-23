@@ -18,6 +18,12 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Keep two GitHub releases ordered; the Blob lease below also coordinates
+# production promotion with CircleCI after both identities are proven.
+concurrency:
+  group: peppermint-production-release
+  cancel-in-progress: false
+
 permissions:
   id-token: write
   contents: read
@@ -48,6 +54,7 @@ jobs:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci-runner
+          args: --accept-routes=true
       - name: Verify and set up shared ACR admission
         # Public workflows cannot load a private repository action. This is an
         # exact, hash-verified export of the same policy, not a separate policy.
@@ -78,12 +85,17 @@ jobs:
           set -euo pipefail
           ACR_LOGIN_SERVER="${{ vars.ACR_LOGIN_SERVER }}"
           ACR_NAME="${ACR_LOGIN_SERVER%.azurecr.io}"
-          IMAGE="${ACR_LOGIN_SERVER}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          [[ "$ACR_LOGIN_SERVER" == acraltairprod.azurecr.io ]]
+          RUN_LOG="$(mktemp)"
+          trap 'rm -f "$RUN_LOG"' EXIT
           python3 "$ACR_POOL_GUARD" build --registry "$ACR_NAME" \
             --key "${GITHUB_REPOSITORY}/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}/${GITHUB_JOB}/image" --wait 1800 -- \
             --image "${{ env.IMAGE_NAME }}:${{ github.sha }}" \
             --file dockerfile \
-            .
+            . | tee "$RUN_LOG"
+          RUN_ID="$(python3 scripts/ci/circleci_peppermint_release.py run-id "$RUN_LOG")"
+          DIGEST="$(python3 scripts/ci/circleci_peppermint_release.py github-digest "$RUN_ID" "$GITHUB_SHA")"
+          IMAGE="${ACR_LOGIN_SERVER}/${{ env.IMAGE_NAME }}@${DIGEST}"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
   deploy:
@@ -93,16 +105,31 @@ jobs:
     environment: production
 
     steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
       - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Update Container App image
-        run: |
-          az containerapp update \
-            --name "${{ vars.CONTAINER_APP_NAME }}" \
-            --resource-group "${{ vars.RESOURCE_GROUP }}" \
-            --image "${{ needs.build.outputs.image }}"
-          echo "Deployed: ${{ needs.build.outputs.image }}"
+      - name: Connect to Tailnet for production release lock
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci-runner
+          args: --accept-routes=true
+
+      - name: Promote exact image under shared release lease and verify rollback
+        env:
+          EXPECTED_GITHUB_IMAGE: ${{ needs.build.outputs.image }}
+        run: bash scripts/ci/github-production-release.sh run
+
+      - name: Retain production release evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: peppermint-production-release-${{ github.run_id }}
+          path: artifacts/peppermint-production-release.json
+          if-no-files-found: ignore
