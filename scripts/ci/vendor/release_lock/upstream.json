@@ -1,0 +1,6 @@
+{
+  "repository": "S7-Lab-Health/altair-infra",
+  "path": "scripts/ci/release_lock.sh",
+  "revision": "b7964640fdb6350c6556123157cdd0390f658abd",
+  "sha256": "5f66c1dbf28c5c5e4f3a19968afcd10f27c18dd3c499beb01c8f1111756720f0"
+}
