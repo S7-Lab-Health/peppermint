@@ -54,6 +54,7 @@ jobs:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci-runner
+          args: --accept-routes=true --accept-dns=false
       - name: Verify and set up shared ACR admission
         # Public workflows cannot load a private repository action. This is an
         # exact, hash-verified export of the same policy, not a separate policy.
@@ -118,6 +119,7 @@ jobs:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci-runner
+          args: --accept-routes=true --accept-dns=false
 
       - name: Promote exact image under shared release lease and verify rollback
         env:
