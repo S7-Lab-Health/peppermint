@@ -75,6 +75,11 @@ if not (
 PY
 }
 
+check_release_lock_export() {
+  python3 scripts/ci/check_release_lock_export.py >/dev/null ||
+    die 'shared app release lock differs from pinned infra source'
+}
+
 validate() {
   test "${CIRCLE_BRANCH:-}" = main || die 'only main may release to production'
   test -z "${CIRCLE_PULL_REQUEST:-}" && test -z "${CIRCLE_PR_NUMBER:-}" &&
@@ -112,6 +117,7 @@ validate() {
   check_private_blob_ip
   check_oidc_claims
   check_shared_policy
+  check_release_lock_export
   check_main_head
 }
 
@@ -170,27 +176,44 @@ run_release() {
   export GITHUB_JOB="$CIRCLE_JOB"
   export GITHUB_SHA="$EXPECTED_RELEASE_SHA"
   export ACR_REQUEST_KEY="circleci/S7-Lab-Health/peppermint/${CIRCLE_WORKFLOW_ID}/${CIRCLE_BUILD_NUM}/${CIRCLE_JOB}/image"
-  local image run_id run_log digest
+  local image run_id run_log digest tag
+  tag="circleci-production-${EXPECTED_RELEASE_SHA}-${CIRCLE_BUILD_NUM}"
   run_log="$(mktemp)"
   trap 'rm -f "$run_log"' RETURN
   python3 scripts/ci/vendor/acr_pool/pool.py build \
     --registry "$ACR_REGISTRY" --pool "$ACR_AGENT_POOL" \
     --account "$ACR_COORDINATION_ACCOUNT" --container "$ACR_COORDINATION_CONTAINER" \
     --key "$ACR_REQUEST_KEY" --wait 1800 -- \
-    --image "peppermint:$EXPECTED_RELEASE_SHA" --file dockerfile . | tee "$run_log"
+    --image "peppermint:$tag" --file dockerfile . | tee "$run_log"
 
   check_main_head
   run_id="$(python3 scripts/ci/circleci_peppermint_release.py run-id "$run_log")"
-  digest="$(python3 scripts/ci/circleci_peppermint_release.py digest "$run_id" "$EXPECTED_RELEASE_SHA")"
+  digest="$(python3 scripts/ci/circleci_peppermint_release.py digest "$run_id" "$tag")"
   image="$ACR_LOGIN_SERVER/peppermint@$digest"
   check_main_head
-  python3 scripts/ci/circleci_peppermint_release.py deploy "$image"
+  export RELEASE_LOCK_ACCOUNT=altairasprod
+  export RELEASE_LOCK_CONTAINER=peppermint-production-release
+  export RELEASE_LOCK_BLOB=peppermint-production.lock
+  export RELEASE_LOCK_PRIVATE_IP="$CIRCLECI_PEPPERMINT_BLOB_IP"
+  export RELEASE_LOCK_ROUTE_DEVICE=tailscale0
+  test "$RELEASE_LOCK_PRIVATE_IP" = 10.0.4.5 || die 'release-lock private endpoint differs from reviewed GitHub route'
+  bash scripts/ci/vendor/release_lock/release_lock.sh run -- \
+    bash scripts/ci/circleci-production-release.sh deploy-locked "$image"
   printf 'Promoted %s to %s\n' "$image" "$CONTAINER_APP_NAME"
+}
+
+deploy_locked() {
+  test "$#" -eq 1 || die 'expected one immutable image'
+  validate
+  bash scripts/ci/vendor/release_lock/release_lock.sh assert
+  check_main_head
+  python3 scripts/ci/circleci_peppermint_release.py deploy "$1"
 }
 
 case "${1:-}" in
   validate) validate ;;
   network) check_journal_route ;;
   run) run_release ;;
+  deploy-locked) shift; deploy_locked "$@" ;;
   *) die 'expected validate, network or run' ;;
 esac

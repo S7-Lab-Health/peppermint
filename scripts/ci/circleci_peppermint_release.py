@@ -35,6 +35,12 @@ def az(*args):
     return json.loads(result.stdout)
 
 
+def assert_release_lock():
+    """Every target write, including rollback, re-proves the shared lease."""
+    subprocess.run(["bash", "scripts/ci/vendor/release_lock/release_lock.sh", "assert"],
+                   check=True, capture_output=True, text=True, timeout=30)
+
+
 def owned_run_id(path):
     matches = re.findall(r"^Run ID: ([A-Za-z0-9_-]+)$", Path(path).read_text(), re.M)
     require(len(matches) == 1 and bool(RUN_ID.fullmatch(matches[0])),
@@ -42,7 +48,7 @@ def owned_run_id(path):
     return matches[0]
 
 
-def owned_digest(run, run_id, sha):
+def owned_digest(run, run_id, tag):
     require(run.get("runId") == run_id and run.get("status") == "Succeeded",
             "ACR run is not the successful owned build")
     images = run.get("outputImages")
@@ -50,7 +56,7 @@ def owned_digest(run, run_id, sha):
     matches = [row for row in images if isinstance(row, dict)
                and row.get("registry") == LOGIN_SERVER
                and row.get("repository") == "peppermint"
-               and row.get("tag") == sha]
+               and row.get("tag") == tag]
     require(len(matches) == 1, "ACR run did not identify exactly one commit image")
     digest = matches[0].get("digest")
     require(isinstance(digest, str) and bool(DIGEST.fullmatch(digest)),
@@ -152,6 +158,7 @@ def deploy(image):
     patched = False
     try:
         require(app_state() == previous, "production app changed before update")
+        assert_release_lock()
         patched = True  # Azure may accept the update even if its CLI later fails.
         az("containerapp", "update", "--name", APP,
            "--resource-group", RESOURCE_GROUP, "--image", image)
@@ -163,6 +170,7 @@ def deploy(image):
             try:
                 current = app_state()
                 if current["image"] == image:
+                    assert_release_lock()
                     az("containerapp", "update", "--name", APP,
                        "--resource-group", RESOURCE_GROUP,
                        "--image", previous_digest_image)
@@ -181,16 +189,25 @@ def main():
     if command == "run-id" and len(sys.argv) == 3:
         print(owned_run_id(sys.argv[2]))
     elif command == "digest" and len(sys.argv) == 4:
+        run_id, tag = sys.argv[2:]
+        require(bool(RUN_ID.fullmatch(run_id)), "invalid ACR run ID")
+        require(re.fullmatch(r"circleci-production-[0-9a-f]{40}-[0-9]+", tag) is not None,
+                "invalid CircleCI production build tag")
+        run = az("acr", "task", "show-run", "--registry", REGISTRY,
+                 "--run-id", run_id)
+        print(owned_digest(run, run_id, tag))
+    elif command == "github-digest" and len(sys.argv) == 4:
         run_id, sha = sys.argv[2:]
         require(bool(RUN_ID.fullmatch(run_id)), "invalid ACR run ID")
-        require(re.fullmatch(r"[0-9a-f]{40}", sha) is not None, "invalid source SHA")
+        require(re.fullmatch(r"[0-9a-f]{40}", sha) is not None,
+                "invalid GitHub source SHA")
         run = az("acr", "task", "show-run", "--registry", REGISTRY,
                  "--run-id", run_id)
         print(owned_digest(run, run_id, sha))
     elif command == "deploy" and len(sys.argv) == 3:
         deploy(sys.argv[2])
     else:
-        raise ReleaseError("expected run-id LOG, digest RUN_ID SHA, or deploy IMAGE")
+        raise ReleaseError("expected run-id LOG, digest RUN_ID TAG, github-digest RUN_ID SHA, or deploy IMAGE")
 
 
 if __name__ == "__main__":

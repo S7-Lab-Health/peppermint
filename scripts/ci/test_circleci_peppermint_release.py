@@ -11,6 +11,7 @@ release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
 
 SHA = "a" * 40
+TAG = f"circleci-production-{SHA}-42"
 DIGEST = "sha256:" + "b" * 64
 IMAGE = f"acraltairprod.azurecr.io/peppermint@{DIGEST}"
 OLD = "acraltairprod.azurecr.io/peppermint:old"
@@ -29,9 +30,9 @@ class ReleaseTests(unittest.TestCase):
 
     def test_digest_is_owned_and_exact(self):
         row = {"registry": release.LOGIN_SERVER, "repository": "peppermint",
-               "tag": SHA, "digest": DIGEST}
+               "tag": TAG, "digest": DIGEST}
         run = {"runId": "ch123", "status": "Succeeded", "outputImages": [row]}
-        self.assertEqual(release.owned_digest(run, "ch123", SHA), DIGEST)
+        self.assertEqual(release.owned_digest(run, "ch123", TAG), DIGEST)
         for mutation in (
             {**run, "runId": "ch124"},
             {**run, "status": "Running"},
@@ -40,7 +41,33 @@ class ReleaseTests(unittest.TestCase):
             {**run, "outputImages": [{**row, "digest": "bad"}]},
         ):
             with self.subTest(mutation=mutation), self.assertRaises(release.ReleaseError):
-                release.owned_digest(mutation, "ch123", SHA)
+                release.owned_digest(mutation, "ch123", TAG)
+
+    def test_github_digest_is_tied_to_owned_sha_tag(self):
+        row = {"registry": release.LOGIN_SERVER, "repository": "peppermint",
+               "tag": SHA, "digest": DIGEST}
+        run = {"runId": "ch123", "status": "Succeeded", "outputImages": [row]}
+        self.assertEqual(release.owned_digest(run, "ch123", SHA), DIGEST)
+        with self.assertRaises(release.ReleaseError):
+            release.owned_digest(run, "ch123", "c" * 40)
+
+    def test_lost_lease_refuses_production_update(self):
+        old = {"image": OLD, "latest": "peppermint--41", "ready": "peppermint--41",
+               "fqdn": "peppermint.example.azurecontainerapps.io"}
+        with tempfile.TemporaryDirectory() as folder:
+            import os
+            saved = os.getcwd()
+            try:
+                os.chdir(folder)
+                with patch.object(release, "app_state", side_effect=[old, old]), \
+                     patch.object(release, "immutable_previous", return_value=OLD_PINNED), \
+                     patch.object(release, "assert_release_lock", side_effect=release.ReleaseError("lost")), \
+                     patch.object(release, "az") as az:
+                    with self.assertRaises(release.ReleaseError):
+                        release.deploy(IMAGE)
+                    az.assert_not_called()
+            finally:
+                os.chdir(saved)
 
     def test_wait_requires_exact_ready_healthy_revision_and_http(self):
         state = {"image": IMAGE, "latest": "peppermint--42", "ready": "peppermint--42",
@@ -77,6 +104,7 @@ class ReleaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder, \
              patch.object(release, "app_state", side_effect=[old, old, candidate]), \
              patch.object(release, "immutable_previous", return_value=OLD_PINNED) as pin, \
+             patch.object(release, "assert_release_lock") as lock, \
              patch.object(release, "az") as az, \
              patch.object(release, "wait_ready", side_effect=[release.ReleaseError("bad"),
                                                                 {"revision": "peppermint--43"}]):
@@ -92,6 +120,7 @@ class ReleaseTests(unittest.TestCase):
             calls = [call.args for call in az.call_args_list if call.args[:2] == ("containerapp", "update")]
             self.assertEqual(len(calls), 2)
             self.assertEqual(calls[1][-1], OLD_PINNED)
+            self.assertEqual(lock.call_count, 2)
             pin.assert_called_once_with(OLD)
 
     def test_concurrent_release_skips_rollback(self):
@@ -105,12 +134,14 @@ class ReleaseTests(unittest.TestCase):
                 os.chdir(folder)
                 with patch.object(release, "app_state", side_effect=[old, old, other]), \
                      patch.object(release, "immutable_previous", return_value=OLD_PINNED), \
+                     patch.object(release, "assert_release_lock") as lock, \
                      patch.object(release, "az") as az, \
                      patch.object(release, "wait_ready", side_effect=release.ReleaseError("bad")):
                     with self.assertRaises(release.ReleaseError):
                         release.deploy(IMAGE)
                     calls = [call.args for call in az.call_args_list if call.args[:2] == ("containerapp", "update")]
                     self.assertEqual(len(calls), 1)
+                    lock.assert_called_once()
                 receipt = (Path("artifacts") / "peppermint-production-release.json").read_text()
                 self.assertIn("skipped: candidate image no longer current", receipt)
             finally:

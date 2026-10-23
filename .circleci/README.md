@@ -2,11 +2,23 @@
 
 The source of truth for current GitHub deployment behavior is
 `.github/workflows/deploy.yml`. The opt-in CircleCI job reproduces its
-`dockerfile` ACR build of `peppermint:<full SHA>` and ACA image update on
+`dockerfile` ACR build of `peppermint:circleci-production-<full SHA>-<build number>` and ACA image update on
 `main`. The Circle job calls the **same checked-in, hash-verified ACR pool
 guard export** as the GitHub workflow in `scripts/ci/vendor/acr_pool/`.
 The export's source revision is recorded in `upstream.json`. GitHub Actions
 remains enabled.
+
+Both providers now stage a second, separate lock around ACA promotion and
+rollback: the exact hash-verified export of `altair-infra`'s
+`scripts/ci/release_lock.sh` in `scripts/ci/vendor/release_lock/`.
+The Circle build tag is unique to its run, and both providers resolve an
+immutable digest from their own successful ACR run. GitHub carries that digest
+between its build and deploy jobs; neither provider promotes a mutable tag.
+The lock scope is the dedicated `altairasprod` container
+`peppermint-production-release`, blob `peppermint-production.lock`, reached
+through the reviewed private endpoint `10.0.4.5`. It is **not** the ACR
+pool-journal blob. The helper retains its infinite lease on failure for
+manual reconciliation.
 
 No trigger is configured. The pipeline parameter
 `run-peppermint-production` defaults to `false`. For a bounded manual
@@ -65,6 +77,12 @@ starts.
 **Release gate:** The OAuth client must be separately provisioned to CircleCI;
 it is not inherited from GitHub. Azure OIDC subject, journal access, exact ACA
 roles, and this VM's native Tailnet route need a scoped live probe.
+Before merging this branch into `main`, create the dedicated lock container
+and blob and grant container-scoped Blob lease access to **both** GitHub and
+CircleCI production identities. Verify both providers reach the same private
+endpoint and run a controlled cross-provider contention test. Until then the
+GitHub workflow change is deliberately held in this draft PR; merging it would
+make GitHub deployments fail closed on the absent lock.
 Do not enable automatic merge triggers until those gates and a controlled
 production release pass. The existing GitHub workflow has no post-deploy
 readiness gate or automatic rollback. These new safety checks have only offline
