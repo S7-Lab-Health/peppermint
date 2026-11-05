@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 import hashlib
 import json
@@ -16,10 +16,13 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 
 SCHEMA = 1
+LEASE_SECONDS = 60
+LEASE_RENEW_SECONDS = 15
 # Deliberately a source gate, not a caller-controlled input. Enable only after
 # consumer migration, effective RBAC review, and an isolated Azure rehearsal.
 SHUTDOWN_ENABLED = False
@@ -178,8 +181,39 @@ class Azure:
         return rows
 
 
-class BlobStore:
-    """One pre-provisioned journal blob per pool; infinite lease, no auto-break.
+class RenewableLease:
+    """Finite ownership survives long operations but not a killed runner."""
+
+    @contextmanager
+    def keepalive(self):
+        stopped = threading.Event()
+
+        def renew():
+            while not stopped.wait(LEASE_RENEW_SECONDS):
+                try:
+                    self.assert_owned()
+                except Exception:
+                    # A failed renewal never creates permission to continue writing.
+                    self.renewal_failed = True
+                    return
+
+        thread = threading.Thread(target=renew, name="acr-lease-renew", daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            stopped.set()
+            thread.join()
+        if self.renewal_failed:
+            raise Refused("Shared lease renewal failed; reconcile recorded operations")
+
+    def require_live_lease(self):
+        if not self.lease or self.renewal_failed or time.monotonic() >= self.lease_deadline:
+            raise Refused("No current journal ownership")
+
+
+class BlobStore(RenewableLease):
+    """One pre-provisioned journal blob per pool; renewable finite lease, no auto-break.
 
     Use explicit bootstrap, never create an empty journal during ordinary builds:
     an accidentally missing journal must not turn a used pool into an idle pool.
@@ -192,24 +226,32 @@ class BlobStore:
         self.name = hashlib.sha256(self.pool_id.encode()).hexdigest() + ".json"
         self.args = ["--account-name", account, "--container-name", container, "--auth-mode", "login"]
         self.lease = None
+        self.renewal_failed = False
+        self.lease_deadline = 0.0
 
     def acquire(self):
         candidate = str(uuid.uuid4())
+        started = time.monotonic()
         self.cli.call("storage", "blob", "lease", "acquire", *self.args,
-                      "--blob-name", self.name, "--lease-duration", "-1",
+                      "--blob-name", self.name, "--lease-duration", str(LEASE_SECONDS),
                       "--proposed-lease-id", candidate)
         self.lease = candidate
+        self.lease_deadline = started + LEASE_SECONDS
+        self.renewal_failed = False
 
     def release(self):
         self.cli.call("storage", "blob", "lease", "release", *self.args,
                       "--blob-name", self.name, "--lease-id", self.lease)
         self.lease = None
+        self.renewal_failed = False
+        self.lease_deadline = 0.0
 
     def assert_owned(self):
-        if not self.lease:
-            raise Refused("No mutation ownership")
+        self.require_live_lease()
+        started = time.monotonic()
         self.cli.call("storage", "blob", "lease", "renew", *self.args,
-                      "--blob-name", self.name, "--lease-id", self.lease)
+                      "--blob-name", self.name, "--lease-id", self.lease, timeout=10)
+        self.lease_deadline = started + LEASE_SECONDS
 
     def load(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -222,8 +264,7 @@ class BlobStore:
                 raise Refused("Unreadable coordination journal") from exc
 
     def save(self, data):
-        if not self.lease:
-            raise Refused("Journal write requires ownership")
+        self.require_live_lease()
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "journal.json"
             path.write_text(json.dumps(data))
@@ -240,7 +281,7 @@ class BlobStore:
                           "--if-none-match", "*", "--no-progress")
 
 
-class RestBlobStore:
+class RestBlobStore(RenewableLease):
     """The same journal protocol for runners without Azure CLI.
 
     request(method, url, headers, bytes) must return bytes and raise AzureError
@@ -256,6 +297,8 @@ class RestBlobStore:
         self.name = hashlib.sha256(self.pool_id.encode()).hexdigest() + ".json"
         self.url = "https://" + account + ".blob.core.windows.net/" + container + "/" + self.name
         self.lease = None
+        self.renewal_failed = False
+        self.lease_deadline = 0.0
 
     def call(self, method, headers=None, data=None, lease_action=None):
         headers = dict(headers or {})
@@ -268,22 +311,28 @@ class RestBlobStore:
 
     def acquire(self):
         candidate = str(uuid.uuid4())
+        started = time.monotonic()
         self.call("PUT", {"x-ms-proposed-lease-id": candidate,
-                          "x-ms-lease-duration": "-1"}, b"", "acquire")
+                          "x-ms-lease-duration": str(LEASE_SECONDS)}, b"", "acquire")
         self.lease = candidate
+        self.lease_deadline = started + LEASE_SECONDS
+        self.renewal_failed = False
 
     def release(self):
         self.assert_lease()
         self.call("PUT", {"x-ms-lease-id": self.lease}, b"", "release")
         self.lease = None
+        self.renewal_failed = False
+        self.lease_deadline = 0.0
 
     def assert_lease(self):
-        if not self.lease:
-            raise Refused("No journal ownership")
+        self.require_live_lease()
 
     def assert_owned(self):
         self.assert_lease()
+        started = time.monotonic()
         self.call("PUT", {"x-ms-lease-id": self.lease}, b"", "renew")
+        self.lease_deadline = started + LEASE_SECONDS
 
     def load(self):
         try:
@@ -373,7 +422,10 @@ class CompatibilityStore:
 
 class Guard:
     def __init__(self, azure, store, clock=None, wait=600, interval=15, idle=3600,
-                 shutdown_enabled=False):
+                 shutdown_enabled=False, max_workers=None):
+        if max_workers is not None and (type(max_workers) is not int or max_workers < 1):
+            raise Refused("max_workers must be a positive integer")
+        self.max_workers = max_workers
         self.azure, self.store = azure, store
         self.clock = clock or Clock()
         self.wait, self.interval, self.idle = wait, interval, idle
@@ -381,7 +433,8 @@ class Guard:
 
     @contextmanager
     def locked(self):
-        deadline = self.clock.monotonic() + self.wait
+        started = self.clock.monotonic()
+        deadline = started + self.wait
         while True:
             try:
                 self.store.acquire()
@@ -390,11 +443,47 @@ class Guard:
                 if not exc.busy:
                     raise
                 self.pause(deadline)
+        print(f"Shared journal acquired after {self.clock.monotonic() - started:.1f}s", flush=True)
         try:
-            data = validate_journal(self.store.load(), self.azure.pool_id)
-            yield data
+            keeper = getattr(self.store, "keepalive", nullcontext)
+            with keeper():
+                data = validate_journal(self.store.load(), self.azure.pool_id)
+                self.reconcile_probe(data)
+                yield data
         finally:
             self.store.release()
+
+    def reconcile_probe(self, data):
+        """Read exact accepted work; never replay an uncertain Azure submission."""
+        pending = data["pending"]
+        if not isinstance(pending, dict) or pending.get("kind") not in {
+            "probe-running", "probe-cancel"
+        }:
+            return
+        identity = run_id({"runId": pending.get("run_id")})
+        status = self.wait_run(identity, self.clock.monotonic() + self.wait)
+        pending["recovered_status"] = status
+        self.settled(data)
+        print("Recovered recorded readiness task: " + identity + " " + status, flush=True)
+
+    def restore_queued_capacity(self, key, identity, deadline):
+        """Warm the existing accepted run after an outside scale-to-zero."""
+        pool = record(self.azure.show_pool())
+        if type(pool.get("count")) is not int or pool["count"] < 0:
+            raise Refused("Invalid pool count while monitoring queued build")
+        if pool["count"]:
+            return
+        with self.locked() as data:
+            request = data["requests"].get(key)
+            if not isinstance(request, dict) or request.get("run_id") != identity:
+                raise Refused("Queued build has no matching admission owner")
+            result = record(self.azure.show_run(identity))
+            if run_id(result) != identity or result.get("agentPoolName") != self.azure.pool:
+                raise Refused("Queued build identity or pool does not match")
+            if result.get("status") == "Queued":
+                if data["pending"] is not None:
+                    raise Refused("Unresolved Azure operation requires explicit recovery")
+                self.ensure_warm(data, deadline)
 
     def pause(self, deadline):
         left = deadline - self.clock.monotonic()
@@ -428,8 +517,8 @@ class Guard:
     def outstanding_runs(self, data):
         """Reserve a slot for every outstanding run, including invisible admissions.
 
-        Azure run listings do not reliably attribute runs to a pool. Count all
-        registry work conservatively, as cooldown does, and deduplicate by ID.
+        Ignore runs explicitly attributed to another pool. Missing attribution
+        remains conservative; tracked admissions still reserve invisible slots.
         Never interpret a failed/incomplete read as spare capacity.
         """
         outstanding = set()
@@ -438,7 +527,11 @@ class Guard:
             status = row.get("status")
             if status not in ACTIVE | TERMINAL:
                 raise Refused("Cannot determine available workers: unknown run status")
-            if status in ACTIVE:
+            attributed_pool = row.get("agentPoolName")
+            if attributed_pool is not None and (not isinstance(attributed_pool, str) or
+                    not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,159}", attributed_pool)):
+                raise Refused("Cannot determine available workers: invalid pool attribution")
+            if status in ACTIVE and (attributed_pool is None or attributed_pool.lower() == self.azure.pool.lower()):
                 outstanding.add(run_id(row))
         for request in data["requests"].values():
             if not isinstance(request, dict) or request.get("status") not in ACTIVE | TERMINAL:
@@ -458,12 +551,20 @@ class Guard:
             count, state = pool.get("count"), pool.get("provisioningState")
             if type(count) is not int or count < 0:
                 raise Refused("Invalid pool count")
+            if self.max_workers is not None and count > self.max_workers:
+                raise Refused("Pool count exceeds configured maximum; review capacity without stopping active work")
+            if state not in {"Succeeded", "Queued", "Creating", "Updating"}:
+                raise Refused("Uncertain pool state")
+            # Existing agents can execute while ARM reports provisioning.
+            # Require spare admitted capacity and the owned execution probe;
+            # never resize a pool whose management transition is unresolved.
+            outstanding = self.outstanding_runs(data) if admission else 0
+            if count >= 1 and (not admission or outstanding < count):
+                return
+            if self.max_workers is not None and count >= self.max_workers:
+                self.pause(deadline)
+                continue
             if state == "Succeeded":
-                # Admission and submission share the lease. A queued build
-                # reserves capacity before the next caller checks for a slot.
-                outstanding = self.outstanding_runs(data) if admission else 0
-                if count >= 1 and (not admission or outstanding < count):
-                    return
                 target = count + 1
                 self.begin(data, "scale-up", previous_count=count, requested_count=target,
                            outstanding_runs=outstanding)
@@ -480,8 +581,6 @@ class Guard:
                 self.wait_pool(target, deadline)
                 self.settled(data)
                 return
-            if state not in {"Queued", "Creating", "Updating"}:
-                raise Refused("Uncertain pool state")
             self.pause(deadline)
 
     def wait_pool(self, expected, deadline):
@@ -496,14 +595,23 @@ class Guard:
                 raise Refused("Capacity transition is unresolved")
             self.pause(deadline)
 
-    def wait_run(self, identity, deadline):
+    def wait_run(self, identity, deadline, *, request_key=None):
+        started = self.clock.monotonic()
+        previous_status = None
         while True:
             result = record(self.azure.show_run(identity))
+            if run_id(result) != identity or result.get("agentPoolName") != self.azure.pool:
+                raise Refused("Owned run identity or agent pool does not match")
             status = result.get("status")
+            if status != previous_status:
+                print(f"ACR task {identity}: {status} after {self.clock.monotonic() - started:.1f}s", flush=True)
+                previous_status = status
             if status in TERMINAL:
                 return status
             if status not in ACTIVE:
                 raise Refused("Unknown ACR run status")
+            if request_key and status == "Queued":
+                self.restore_queued_capacity(request_key, identity, deadline)
             self.pause(deadline)
 
     def probe(self, data, deadline):
@@ -565,7 +673,9 @@ class Guard:
         print("Run ID: " + identity, flush=True)
         if monitor:
             try:
-                status = self.wait_run(identity, deadline)
+                # Admission may consume its full budget while another build
+                # owns the pool. Give this accepted run its own monitor budget.
+                status = self.wait_run(identity, self.clock.monotonic() + self.wait, request_key=key)
             except (Refused, KeyboardInterrupt):
                 # A runner timeout is not a terminal ACR result. Only the owned
                 # run can be cancelled; settle it before clearing the journal.
@@ -670,11 +780,15 @@ def main():
     parser.add_argument("--args-file", default=os.getenv("ACR_BUILD_ARGS_FILE"))
     parser.add_argument("--wait", type=int, default=int(os.getenv("MAX_WAIT_SECONDS", "7200")))
     parser.add_argument("--interval", type=int, default=int(os.getenv("POLL_INTERVAL_SECONDS", "15")))
+    parser.add_argument("--max-workers", type=int, default=int(os.getenv("ACR_MAX_WORKERS", "0")))
     args = parser.parse_args(command)
     if arguments is not None and (args.operation != "build" or args.args_file):
         parser.error("Use either --args-file or build arguments after --")
     if args.wait <= 0 or args.interval <= 0:
         parser.error("wait and interval must be positive")
+    if args.max_workers < 0:
+        parser.error("max-workers must be zero (existing policy) or positive")
+    max_workers = args.max_workers or (1 if args.pool.lower() == "agentpool-preprod" else None)
     if args.operation == "cooldown" and not SHUTDOWN_ENABLED:
         print("Cooldown disabled: consumer migration, effective RBAC and Azure rehearsal required")
         return 0
@@ -691,7 +805,7 @@ def main():
         else:
             store = BlobStore(azure.cli, args.account, args.container, azure.pool_id)
         guard = Guard(azure, store, wait=args.wait, interval=args.interval,
-                      shutdown_enabled=SHUTDOWN_ENABLED)
+                      shutdown_enabled=SHUTDOWN_ENABLED, max_workers=max_workers)
         if args.operation == "ready":
             guard.ready()
         elif args.operation == "initialize":

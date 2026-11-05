@@ -1,6 +1,6 @@
 {
   "repository": "S7-Lab-Health/altair-infra",
-  "revision": "da53bfa6f9d9264156449b29420bb43fade54975",
+  "revision": "a233091cb0588ef3ba7b6bd2ee29d421d125f7b6",
   "path": ".github/actions/acr-agentpool-scale-up/pool.py",
-  "sha256": "1b42cd147c5c9e3cfffdcc56da7edf265720f308433782bf1f66bdaab6c58ebd"
+  "sha256": "96555fbfcb95fdfe817f4b9bf29ddafe872dd5ea3d2ec4729c402d2b8385f2f6"
 }
