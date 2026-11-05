@@ -64,6 +64,13 @@ jobs:
           policy = folder / 'pool.py'
           if hashlib.sha256(policy.read_bytes()).hexdigest() != manifest['sha256']:
               raise SystemExit('Shared ACR policy differs from its pinned export')
+          endpoint = folder / 'private_endpoint.py'
+          endpoint_manifest = json.loads((folder / 'private_endpoint_upstream.json').read_text())
+          if (endpoint_manifest['repository'] != manifest['repository']
+              or endpoint_manifest['revision'] != manifest['revision']
+              or endpoint_manifest['path'] != '.github/actions/acr-agentpool-scale-up/private_endpoint.py'
+              or hashlib.sha256(endpoint.read_bytes()).hexdigest() != endpoint_manifest['sha256']):
+              raise SystemExit('Private endpoint helper differs from its pinned export')
           with open(os.environ['GITHUB_ENV'], 'a') as output:
               output.write(f'ACR_POOL_GUARD={policy}\n')
               output.write('ACR_REGISTRY=acraltairprod\n')
@@ -71,6 +78,18 @@ jobs:
               output.write('ACR_COORDINATION_ACCOUNT=altairasprod\n')
               output.write('ACR_COORDINATION_CONTAINER=acr-pool-coordination\n')
           PY
+
+      - name: Verify private build journal access
+        run: |
+          set -euo pipefail
+          # Tailnet supplies the route; bind this private hostname only after TLS verification.
+          sudo python3 scripts/ci/vendor/acr_pool/private_endpoint.py \
+            --account altairasprod --address 10.0.4.5
+          pool_id="$(az acr show --name acraltairprod --query id --output tsv)/agentPools/agentpool-production"
+          journal="$(printf '%s' "$pool_id" | tr '[:upper:]' '[:lower:]' | sha256sum | cut -d ' ' -f 1).json"
+          az storage blob show --account-name altairasprod \
+            --container-name acr-pool-coordination --name "$journal" \
+            --auth-mode login --query properties.blobType --output tsv
 
       - name: Build and push
         id: push
