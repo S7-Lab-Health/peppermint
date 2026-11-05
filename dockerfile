@@ -3,6 +3,10 @@ FROM node:lts AS builder
 # Set the working directory inside the container
 WORKDIR /app
 
+# Node 26 images no longer bundle the Yarn Classic CLI used below.
+RUN npm install --global --ignore-scripts yarn@1.22.22 && \
+    test "$(yarn --version)" = "1.22.22"
+
 RUN apt-get update && \
     apt-get install -y build-essential python3
 
