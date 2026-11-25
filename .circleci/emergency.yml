@@ -1,0 +1,46 @@
+# Trusted-base emergency PR merge. A separate GitHub App label trigger runs this config.
+version: 2.1
+
+jobs:
+  emergency-merge:
+    docker:
+      - image: cimg/python:3.11.14@sha256:c97ce2a12391d6fde041a8378d2831cd84d11cec19c416b17b9e70bea4ae5a7f
+    resource_class: small
+    environment:
+      GITHUB_REPOSITORY: S7-Lab-Health/peppermint
+      EXPECTED_CIRCLE_PROJECT_ID: 0706e010-61eb-496b-a0e1-d7a0e96a7b6a
+      PR_NUMBER: << pipeline.event.github.pull_request.number >>
+      EXPECTED_EVENT_ACTION: << pipeline.event.action >>
+      EXPECTED_EVENT_LABEL: << pipeline.event.github.label.name >>
+      EXPECTED_BASE_REF: << pipeline.event.github.pull_request.base.ref >>
+      EXPECTED_BASE_SHA: << pipeline.event.github.pull_request.base.sha >>
+      EXPECTED_HEAD_SHA: << pipeline.event.github.pull_request.head.sha >>
+    steps:
+      - checkout
+      - run:
+          name: Install pinned GitHub CLI for the existing emergency contract
+          command: |
+            if [ "${EMERGENCY_MERGE_ENABLED:-false}" = true ]; then
+              scratch="$(mktemp -d)"
+              trap 'rm -rf "$scratch"' EXIT
+              curl -fsSL --retry 2 \
+                https://github.com/cli/cli/releases/download/v2.105.0/gh_2.105.0_linux_amd64.tar.gz \
+                -o "$scratch/gh.tar.gz"
+              printf '%s  %s\n' \
+                79e7ab5db738c48777b696e374f8b428f0647debfb424f44d2f426370407fe2f \
+                "$scratch/gh.tar.gz" | sha256sum -c -
+              tar -xzf "$scratch/gh.tar.gz" -C "$scratch" \
+                gh_2.105.0_linux_amd64/bin/gh
+              sudo install -m 0755 "$scratch/gh_2.105.0_linux_amd64/bin/gh" /usr/local/bin/gh
+              gh --version
+            fi
+      - run:
+          name: Verify label event and merge exact PR head when enabled
+          command: python3 -B .github/scripts/circleci_emergency_merge.py
+
+workflows:
+  emergency-label:
+    when: pipeline.event.name == "pull_request" and pipeline.event.action == "labeled" and pipeline.event.github.label.name == "emergency"
+    jobs:
+      - emergency-merge:
+          context: altair-emergency-merge
