@@ -5,6 +5,9 @@ on:
     paths:
       - '.github/scripts/emergency_pr.py'
       - '.github/scripts/test_emergency_pr.py'
+      - '.github/scripts/circleci_emergency_merge.py'
+      - '.github/scripts/test_circleci_emergency_merge.py'
+      - '.circleci/emergency.yml'
       - '.github/workflows/emergency-auto-approve.yml'
       - '.github/workflows/emergency-contract.yml'
   workflow_dispatch:
@@ -15,4 +18,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-      - run: python3 -m unittest discover -s .github/scripts -p test_emergency_pr.py
+      - run: python3 -m unittest discover -s .github/scripts -p 'test*emergency*.py'
